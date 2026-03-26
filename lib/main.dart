@@ -618,8 +618,17 @@ class _ListaPreciosAppState extends State<ListaPreciosApp> {
                   context,
                   MaterialPageRoute(
                       builder: (_) => CarritoPage(
-                          carrito: _carrito,
-                          onUpdate: () => setState(() {})))),
+                            carrito: _carrito,
+                            onUpdate: () => setState(() {}),
+                            onNuevaCompra: () {
+                              setState(() {
+                                _carrito.clear();
+                                _queryActual = '';
+                                _lista = [];
+                                _searchController.clear();
+                              });
+                            },
+                          ))),
               label: Text('${_carrito.length} items'),
               icon: const Icon(Icons.shopping_cart),
               backgroundColor: Colors.green,
@@ -634,8 +643,9 @@ class _ListaPreciosAppState extends State<ListaPreciosApp> {
 class CarritoPage extends StatefulWidget {
   final List<ArticuloCarrito> carrito;
   final VoidCallback onUpdate;
+  final VoidCallback onNuevaCompra;
   const CarritoPage(
-      {super.key, required this.carrito, required this.onUpdate});
+      {super.key, required this.carrito, required this.onUpdate, required this.onNuevaCompra});
 
   @override
   State<CarritoPage> createState() => _CarritoPageState();
@@ -669,6 +679,7 @@ class _CarritoPageState extends State<CarritoPage> {
         children: [
           Expanded(
             child: ListView.builder(
+              padding: const EdgeInsets.only(bottom: 16),
               itemCount: widget.carrito.length,
               itemBuilder: (ctx, i) {
                 final item = widget.carrito[i];
@@ -709,8 +720,10 @@ class _CarritoPageState extends State<CarritoPage> {
               },
             ),
           ),
-          Container(
-            padding: const EdgeInsets.all(20),
+          SafeArea(
+            top: false,
+            child: Container(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
             decoration: const BoxDecoration(
               color: Colors.white,
               boxShadow: [
@@ -721,6 +734,7 @@ class _CarritoPageState extends State<CarritoPage> {
               ],
             ),
             child: Column(
+              mainAxisSize: MainAxisSize.min,
               children: [
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -737,10 +751,10 @@ class _CarritoPageState extends State<CarritoPage> {
                             color: Colors.green)),
                   ],
                 ),
-                const SizedBox(height: 15),
+                const SizedBox(height: 12),
                 SizedBox(
                   width: double.infinity,
-                  height: 50,
+                  height: 48,
                   child: ElevatedButton.icon(
                     onPressed: widget.carrito.isEmpty
                         ? null
@@ -751,10 +765,49 @@ class _CarritoPageState extends State<CarritoPage> {
                         backgroundColor: Colors.green,
                         foregroundColor: Colors.white),
                   ),
+                ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  height: 48,
+                  child: ElevatedButton.icon(
+                    onPressed: () {
+                      showDialog(
+                        context: context,
+                        builder: (ctx) => AlertDialog(
+                          title: const Text('¿Nueva compra?'),
+                          content: const Text(
+                              'Se va a vaciar el carrito y volver al buscador.'),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.pop(ctx),
+                              child: const Text('Cancelar'),
+                            ),
+                            ElevatedButton(
+                              onPressed: () {
+                                Navigator.pop(ctx);
+                                widget.onNuevaCompra();
+                                Navigator.pop(context);
+                              },
+                              style: ElevatedButton.styleFrom(
+                                  backgroundColor: _kRojo,
+                                  foregroundColor: Colors.white),
+                              child: const Text('Sí, nueva compra'),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.shopping_cart_checkout),
+                    label: const Text('FINALIZAR / NUEVA COMPRA'),
+                    style: ElevatedButton.styleFrom(
+                        backgroundColor: _kRojo,
+                        foregroundColor: Colors.white),
+                  ),
                 )
               ],
             ),
-          )
+          ))
         ],
       ),
     );
