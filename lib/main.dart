@@ -241,21 +241,69 @@ class _ListaPreciosAppState extends State<ListaPreciosApp> {
     });
   }
 
-  void _agregarAlCarrito(Producto prod) { // FIX #1: 'p' → 'prod'
-    setState(() {
-      final index =
-          _carrito.indexWhere((item) => item.producto.id == prod.id);
-      if (index >= 0) {
-        _carrito[index].cantidad++;
-      } else {
-        _carrito.add(ArticuloCarrito(producto: prod));
-      }
-    });
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text('${prod.desc} agregado'),
-      duration: const Duration(seconds: 1),
-      backgroundColor: Colors.green,
-    ));
+  void _agregarAlCarrito(Producto prod) {
+    final cantCtrl = TextEditingController(text: '1');
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(prod.desc,
+            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('\$${prod.minor}',
+                style: const TextStyle(
+                    fontSize: 22, fontWeight: FontWeight.bold, color: _kRojo)),
+            const SizedBox(height: 16),
+            TextField(
+              controller: cantCtrl,
+              keyboardType: TextInputType.number,
+              autofocus: true,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
+              decoration: const InputDecoration(
+                labelText: 'Cantidad',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancelar'),
+          ),
+          ElevatedButton.icon(
+            onPressed: () {
+              final cantidad = int.tryParse(cantCtrl.text) ?? 1;
+              if (cantidad > 0) {
+                setState(() {
+                  final index = _carrito
+                      .indexWhere((item) => item.producto.id == prod.id);
+                  if (index >= 0) {
+                    _carrito[index].cantidad += cantidad;
+                  } else {
+                    _carrito.add(
+                        ArticuloCarrito(producto: prod, cantidad: cantidad));
+                  }
+                });
+                Navigator.pop(ctx);
+                setState(() => _selectedId = null);
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                  content: Text('${cantidad}x ${prod.desc} agregado'),
+                  duration: const Duration(seconds: 1),
+                  backgroundColor: Colors.green,
+                ));
+              }
+            },
+            icon: const Icon(Icons.add_shopping_cart),
+            label: const Text('Agregar'),
+            style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.green, foregroundColor: Colors.white),
+          ),
+        ],
+      ),
+    );
   }
 
   // --- MÉTODOS DE SOPORTE ---
@@ -595,16 +643,56 @@ class _ListaPreciosAppState extends State<ListaPreciosApp> {
                                   fontSize: 18,
                                   fontWeight: FontWeight.bold)),
                           trailing: isSelected
-                              ? IconButton(
-                                  icon: const Icon(
-                                      Icons.add_shopping_cart,
-                                      color: Colors.green),
-                                  onPressed: () =>
-                                      _agregarAlCarrito(prod))
-                              : IconButton(
-                                  icon: const Icon(Icons.edit, size: 20),
-                                  onPressed: () =>
-                                      _abrirFormulario(existente: prod)),
+                              ? Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    IconButton(
+                                      icon: const Icon(Icons.add_shopping_cart, color: Colors.green),
+                                      tooltip: 'Agregar al carrito',
+                                      onPressed: () => _agregarAlCarrito(prod),
+                                    ),
+                                    IconButton(
+                                      icon: const Icon(Icons.edit, color: Colors.orange),
+                                      tooltip: 'Editar',
+                                      onPressed: () {
+                                        setState(() => _selectedId = null);
+                                        _abrirFormulario(existente: prod);
+                                      },
+                                    ),
+                                    IconButton(
+                                      icon: const Icon(Icons.delete, color: Colors.red),
+                                      tooltip: 'Eliminar',
+                                      onPressed: () async {
+                                        final confirmar = await showDialog<bool>(
+                                          context: context,
+                                          builder: (ctx) => AlertDialog(
+                                            title: const Text('¿Eliminar?'),
+                                            content: Text('¿Eliminás "${prod.desc}"?'),
+                                            actions: [
+                                              TextButton(
+                                                onPressed: () => Navigator.pop(ctx, false),
+                                                child: const Text('Cancelar'),
+                                              ),
+                                              ElevatedButton(
+                                                onPressed: () => Navigator.pop(ctx, true),
+                                                style: ElevatedButton.styleFrom(
+                                                    backgroundColor: Colors.red,
+                                                    foregroundColor: Colors.white),
+                                                child: const Text('Eliminar'),
+                                              ),
+                                            ],
+                                          ),
+                                        );
+                                        if (confirmar == true) {
+                                          await DatabaseService.eliminar(prod.id!);
+                                          _actualizarContador();
+                                          _cargarPagina(reset: true);
+                                        }
+                                      },
+                                    ),
+                                  ],
+                                )
+                              : null,
                         ),
                       );
                     },
