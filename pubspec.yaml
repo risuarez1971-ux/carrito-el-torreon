@@ -1,0 +1,31 @@
+name: carrito_el_torreon
+description: "A new Flutter project."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.0.0 # Ajustado para mayor compatibilidad
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+  
+  # --- DEPENDENCIAS AGREGADAS ---
+  mobile_scanner: ^5.2.3     # Para el escaneo de códigos de barra
+  sqflite: ^2.3.3+1          # Para la base de datos local
+  path: ^1.9.0               # Utilidades de rutas de archivos
+  path_provider: ^2.1.4      # Para encontrar carpetas temporales/documentos
+  file_picker: ^8.1.2        # Para seleccionar el Excel/CSV
+  excel: ^4.0.3              # Para leer y generar archivos Excel
+  share_plus: ^10.1.2        # Para compartir por WhatsApp o Email
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
