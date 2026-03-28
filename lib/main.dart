@@ -1,15 +1,15 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:sqflite/sqflite.dart';
-import 'package:path/path.dart' as path_lib;
+import 'package:path/path.dart' as p;
 import 'package:file_picker/file_picker.dart';
 import 'package:excel/excel.dart';
 import 'package:share_plus/share_plus.dart';
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
-
-// --- MODELOS ---
 
 class Producto {
   final int? id;
@@ -45,28 +45,36 @@ class Producto {
 
   factory Producto.fromMap(Map<String, dynamic> m) => Producto(
         id: m['id'] as int?,
-        codigo: m['codigo']?.toString() ?? '',
-        barra: m['barra']?.toString() ?? '',
-        desc: m['desc']?.toString() ?? '',
-        marca: m['marca']?.toString() ?? '',
-        mayor: m['mayor']?.toString() ?? '0,00',
-        minor: m['minor']?.toString() ?? '0,00',
-        prov: m['prov']?.toString() ?? '',
+        codigo: m['codigo'] as String? ?? '',
+        barra: m['barra'] as String? ?? '',
+        desc: m['desc'] as String? ?? '',
+        marca: m['marca'] as String? ?? '',
+        mayor: m['mayor'] as String? ?? '0,00',
+        minor: m['minor'] as String? ?? '0,00',
+        prov: m['prov'] as String? ?? '',
+      );
+
+  Producto copyWith({
+    int? id,
+    String? codigo,
+    String? barra,
+    String? desc,
+    String? marca,
+    String? mayor,
+    String? minor,
+    String? prov,
+  }) =>
+      Producto(
+        id: id ?? this.id,
+        codigo: codigo ?? this.codigo,
+        barra: barra ?? this.barra,
+        desc: desc ?? this.desc,
+        marca: marca ?? this.marca,
+        mayor: mayor ?? this.mayor,
+        minor: minor ?? this.minor,
+        prov: prov ?? this.prov,
       );
 }
-
-class ArticuloCarrito {
-  final Producto producto;
-  int cantidad;
-
-  ArticuloCarrito({required this.producto, this.cantidad = 1});
-
-  double get precioDouble =>
-      double.tryParse(producto.minor.replaceAll(',', '.')) ?? 0.0;
-  double get subtotal => precioDouble * cantidad;
-}
-
-// --- BASE DE DATOS ---
 
 class DatabaseService {
   static Database? _db;
@@ -78,7 +86,7 @@ class DatabaseService {
 
   static Future<Database> _initDb() async {
     final dbPath = await getDatabasesPath();
-    final fullPath = path_lib.join(dbPath, 'torreon.db'); // FIX #1 aplicado
+    final fullPath = p.join(dbPath, 'torreon.db');
     return openDatabase(
       fullPath,
       version: 1,
@@ -95,8 +103,7 @@ class DatabaseService {
             prov   TEXT
           )
         ''');
-        await db.execute(
-            'CREATE INDEX idx_desc  ON productos(desc COLLATE NOCASE)');
+        await db.execute('CREATE INDEX idx_desc  ON productos(desc  COLLATE NOCASE)');
         await db.execute('CREATE INDEX idx_barra ON productos(barra)');
       },
     );
@@ -117,11 +124,21 @@ class DatabaseService {
     return rows.map(Producto.fromMap).toList();
   }
 
+  static Future<List<Producto>> listar({int limit = 60, int offset = 0}) async {
+    final database = await db;
+    final rows = await database.query(
+      'productos',
+      orderBy: 'desc COLLATE NOCASE',
+      limit: limit,
+      offset: offset,
+    );
+    return rows.map(Producto.fromMap).toList();
+  }
+
   static Future<int> contar({String? query}) async {
     final database = await db;
     if (query == null || query.isEmpty) {
-      final result =
-          await database.rawQuery('SELECT COUNT(*) as c FROM productos');
+      final result = await database.rawQuery('SELECT COUNT(*) as c FROM productos');
       return result.first['c'] as int;
     }
     final q = '%$query%';
@@ -132,113 +149,431 @@ class DatabaseService {
     return result.first['c'] as int;
   }
 
-  static Future<void> insertarLote(List<Producto> ps) async {
-    final d = await db;
-    await d.transaction((txn) async {
-      final b = txn.batch();
-      for (final prod in ps) { // FIX #1 aplicado: 'p' → 'prod'
-        b.insert('productos', prod.toMap(),
+  static Future<Producto?> buscarPorBarra(String barra) async {
+    final database = await db;
+    final rows = await database.query(
+      'productos',
+      where: 'barra = ?',
+      whereArgs: [barra],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return Producto.fromMap(rows.first);
+  }
+
+  static Future<String> proximoCodigo() async {
+    final database = await db;
+    final result = await database.rawQuery(
+      "SELECT MAX(CAST(codigo AS INTEGER)) as max_cod FROM productos WHERE codigo != '' AND codigo GLOB '[0-9]*'",
+    );
+    final maxCod = result.first['max_cod'];
+    if (maxCod == null) return '1';
+    return ((maxCod as int) + 1).toString();
+  }
+
+  static Future<void> insertar(Producto producto) async {
+    final database = await db;
+    await database.insert('productos', producto.toMap(),
+        conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  static Future<void> insertarLote(List<Producto> productos) async {
+    final database = await db;
+    await database.transaction((txn) async {
+      final batch = txn.batch();
+      for (final p in productos) {
+        batch.insert('productos', p.toMap(),
             conflictAlgorithm: ConflictAlgorithm.replace);
       }
-      await b.commit(noResult: true);
+      await batch.commit(noResult: true);
     });
   }
 
-  static Future<void> insertar(Producto prod) async => // FIX #1: 'p' → 'prod'
-      (await db).insert('productos', prod.toMap());
-  static Future<void> actualizar(Producto prod) async => // FIX #1: 'p' → 'prod'
-      (await db).update('productos', prod.toMap(),
-          where: 'id = ?', whereArgs: [prod.id]);
-  static Future<void> eliminar(int id) async =>
-      (await db).delete('productos', where: 'id = ?', whereArgs: [id]);
-  static Future<void> eliminarTodos() async =>
-      (await db).delete('productos');
-  static Future<List<Producto>> todos() async =>
-      (await db)
-          .query('productos', orderBy: 'desc COLLATE NOCASE')
-          .then((r) => r.map(Producto.fromMap).toList());
+  static Future<void> actualizar(Producto producto) async {
+    final database = await db;
+    await database.update(
+      'productos',
+      producto.toMap(),
+      where: 'id = ?',
+      whereArgs: [producto.id],
+    );
+  }
+
+  static Future<void> eliminar(int id) async {
+    final database = await db;
+    await database.delete('productos', where: 'id = ?', whereArgs: [id]);
+  }
+
+  static Future<void> eliminarTodos() async {
+    final database = await db;
+    await database.delete('productos');
+  }
+
+  static Future<List<Producto>> todos() async {
+    final database = await db;
+    final rows = await database.query('productos', orderBy: 'desc COLLATE NOCASE');
+    return rows.map(Producto.fromMap).toList();
+  }
 }
 
-// --- UI PRINCIPAL ---
+class _ParseArgs {
+  final String path;
+  final String ext;
+  const _ParseArgs(this.path, this.ext);
+}
+
+List<Producto> _parsearArchivo(_ParseArgs args) {
+  final file = File(args.path);
+  final List<Producto> productos = [];
+
+  if (args.ext == 'xlsx') {
+    final bytes = file.readAsBytesSync();
+    final excel = Excel.decodeBytes(bytes);
+    for (final table in excel.tables.keys) {
+      final rows = excel.tables[table]!.rows;
+      for (var i = 1; i < rows.length; i++) {
+        final row = rows[i];
+        if (row.length >= 6) {
+          productos.add(Producto(
+            codigo: row[0]?.value?.toString() ?? '',
+            barra: row[1]?.value?.toString() ?? '',
+            desc: row[2]?.value?.toString() ?? '',
+            marca: row[3]?.value?.toString() ?? '',
+            mayor: (row[4]?.value?.toString() ?? '0,00').replaceAll('.', ','),
+            minor: (row[5]?.value?.toString() ?? '0,00').replaceAll('.', ','),
+            prov: row.length > 6 ? row[6]?.value?.toString() ?? '' : '',
+          ));
+        }
+      }
+      break;
+    }
+  } else if (args.ext == 'csv') {
+    String input;
+    try {
+      input = file.readAsStringSync(encoding: utf8);
+    } catch (_) {
+      input = file.readAsStringSync(encoding: latin1);
+    }
+    final lineas = input.split('\n');
+    for (var i = 1; i < lineas.length; i++) {
+      final linea = lineas[i].trim();
+      if (linea.isEmpty) continue;
+      final campos = linea.split(';');
+      if (campos.length >= 6) {
+        productos.add(Producto(
+          codigo: campos[0].trim(),
+          barra: campos[1].trim(),
+          desc: campos[2].trim(),
+          marca: campos[3].trim(),
+          mayor: campos[4].trim().replaceAll('.', ','),
+          minor: campos[5].trim().replaceAll('.', ','),
+          prov: campos.length > 6 ? campos[6].trim() : '',
+        ));
+      }
+    }
+  }
+
+  return productos;
+}
+
+// --- MODELO CARRITO ---
+
+class ArticuloCarrito {
+  final Producto producto;
+  int cantidad;
+
+  ArticuloCarrito({required this.producto, this.cantidad = 1});
+
+  double get precioDouble =>
+      double.tryParse(producto.minor.replaceAll(',', '.')) ?? 0.0;
+  double get subtotal => precioDouble * cantidad;
+}
 
 const _kRojo = Color(0xFFB71C1C);
 
-void main() => runApp(const MaterialApp(
-    home: ListaPreciosApp(), debugShowCheckedModeBanner: false));
+void main() {
+  runApp(const MaterialApp(
+    home: ListaPreciosApp(),
+    debugShowCheckedModeBanner: false,
+  ));
+}
 
 class ListaPreciosApp extends StatefulWidget {
   const ListaPreciosApp({super.key});
+
   @override
   State<ListaPreciosApp> createState() => _ListaPreciosAppState();
 }
 
 class _ListaPreciosAppState extends State<ListaPreciosApp> {
   List<Producto> _lista = [];
-  final List<ArticuloCarrito> _carrito = [];
-  int _totalDbCount = 0;
+  int _totalCount = 0;
   bool _cargando = false;
   bool _hayMas = true;
   int _offset = 0;
+  static const int _pageSize = 60;
   int? _selectedId;
+  final List<ArticuloCarrito> _carrito = [];
+
+  final TextEditingController _searchController = TextEditingController();
   String _queryActual = '';
   Timer? _debounce;
   final ScrollController _scrollController = ScrollController();
-  final TextEditingController _searchController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
     _actualizarContador();
-    _scrollController.addListener(() {
-      if (_scrollController.position.pixels >=
-              _scrollController.position.maxScrollExtent - 200 &&
-          _hayMas &&
-          !_cargando) {
-        _cargarPagina();
-      }
-    });
+    _scrollController.addListener(_onScroll);
   }
 
-  // FIX #2: dispose correcto — cancela debounce y libera controladores
   @override
   void dispose() {
     _debounce?.cancel();
-    _scrollController.dispose();
     _searchController.dispose();
+    _scrollController.dispose();
     super.dispose();
   }
 
   Future<void> _actualizarContador() async {
-    final t = await DatabaseService.contar();
-    if (mounted) setState(() => _totalDbCount = t);
+    final total = await DatabaseService.contar();
+    if (mounted) setState(() => _totalCount = total);
+  }
+
+  void _onScroll() {
+    if (_scrollController.position.pixels >=
+            _scrollController.position.maxScrollExtent - 200 &&
+        _hayMas &&
+        !_cargando) {
+      _cargarPagina();
+    }
   }
 
   Future<void> _cargarPagina({bool reset = false}) async {
+    if (_cargando) return;
     if (_queryActual.isEmpty) {
       setState(() {
         _lista = [];
         _cargando = false;
+        _selectedId = null;
       });
       return;
     }
+
+    setState(() => _cargando = true);
+
     if (reset) {
       _offset = 0;
       _hayMas = true;
       _selectedId = null;
     }
-    if (_cargando) return;
 
-    setState(() => _cargando = true);
-    final nuevos = await DatabaseService.buscar(_queryActual,
-        limit: 60, offset: _offset);
+    final query = _queryActual;
+    final nuevos = await DatabaseService.buscar(query, limit: _pageSize, offset: _offset);
+    final total = await DatabaseService.contar(query: query);
 
-    // FIX #3: si devuelve menos de 60, ya no hay más — evita petición extra vacía
     setState(() {
-      _lista = reset ? nuevos : [..._lista, ...nuevos];
+      if (reset) {
+        _lista = nuevos;
+      } else {
+        _lista = [..._lista, ...nuevos];
+      }
+      _totalCount = total;
       _offset += nuevos.length;
-      _hayMas = nuevos.length == 60; // solo hay más si vino la página completa
+      _hayMas = nuevos.length == _pageSize;
       _cargando = false;
     });
+  }
+
+  void _onSearchChanged(String value) {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 250), () {
+      final trimmed = value.trim();
+      setState(() => _queryActual = trimmed);
+      if (trimmed.isEmpty) {
+        setState(() {
+          _lista = [];
+          _selectedId = null;
+          _hayMas = false;
+        });
+        _actualizarContador();
+      } else {
+        _cargarPagina(reset: true);
+      }
+    });
+  }
+
+  Future<void> _escanearEnBusqueda() async {
+  final codigo = await Navigator.push<String>(
+    context,
+    MaterialPageRoute(builder: (_) => const EscanerPage()),
+  );
+  if (codigo == null || !mounted) return;
+
+  final existente = await DatabaseService.buscarPorBarra(codigo);
+  if (!mounted) return;
+
+  if (existente != null) {
+    // Mostrar en la lista, no abrir diálogo de precios
+    _searchController.text = codigo;
+    setState(() => _queryActual = codigo);
+    _cargarPagina(reset: true);
+  } else {
+    _abrirFormulario(barraPrecargada: codigo);
+  }
+}
+
+  Future<void> _importarArchivo() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['xlsx', 'csv'],
+    );
+    if (result == null) return;
+
+    final path = result.files.single.path!;
+    final ext = result.files.single.extension ?? '';
+
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const AlertDialog(
+        content: Row(
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(width: 16),
+            Text('Procesando archivo...'),
+          ],
+        ),
+      ),
+    );
+
+    try {
+      final productos = await compute(_parsearArchivo, _ParseArgs(path, ext));
+      await DatabaseService.eliminarTodos();
+      await DatabaseService.insertarLote(productos);
+
+      if (mounted) {
+        Navigator.of(context).pop();
+        _searchController.clear();
+        setState(() {
+          _queryActual = '';
+          _lista = [];
+          _totalCount = productos.length;
+          _selectedId = null;
+          _offset = 0;
+          _hayMas = false;
+          _cargando = false;
+        });
+        _notificar('${productos.length} productos importados');
+      }
+    } catch (e) {
+      if (mounted) {
+        Navigator.of(context).pop();
+        _notificar('Error al procesar el archivo');
+      }
+    }
+  }
+
+  Future<void> _compartirExcel() async {
+    if (_totalCount == 0) {
+      _notificar('No hay productos para exportar');
+      return;
+    }
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const AlertDialog(
+        content: Row(
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(width: 16),
+            Text('Generando Excel...'),
+          ],
+        ),
+      ),
+    );
+
+    try {
+      final todos = await DatabaseService.todos();
+      final excel = Excel.createExcel();
+      // Rename Sheet1 y eliminar hojas extra
+      if (excel.sheets.containsKey('Sheet1')) excel.rename('Sheet1', 'Precios');
+      excel.sheets.keys.where((n) => n != 'Precios').toList().forEach(excel.delete);
+      final sheet = excel['Precios'];
+
+      sheet.appendRow([
+        TextCellValue('CODIGO INTERNO'),
+        TextCellValue('CODIGO DE BARRAS'),
+        TextCellValue('DESCRIPCION'),
+        TextCellValue('MARCA'),
+        TextCellValue('MAYOR'),
+        TextCellValue('MINOR'),
+        TextCellValue('PROVEEDOR'),
+      ]);
+
+      for (final prod in todos) {
+        sheet.appendRow([
+          TextCellValue(prod.codigo),
+          TextCellValue(prod.barra),
+          TextCellValue(prod.desc),
+          TextCellValue(prod.marca),
+          TextCellValue(prod.mayor),
+          TextCellValue(prod.minor),
+          TextCellValue(prod.prov),
+        ]);
+      }
+
+      final bytes = excel.save();
+      if (bytes == null) throw Exception('bytes null');
+
+      final directory = await getTemporaryDirectory();
+      final file = File('${directory.path}/Lista_Precios_Torreon.xlsx');
+      await file.writeAsBytes(bytes, flush: true);
+
+      if (mounted) {
+        Navigator.of(context).pop();
+        await SharePlus.instance.share(ShareParams(
+          files: [XFile(file.path)],
+          text: 'Lista de precios El Torreon',
+        ));
+      }
+    } catch (e, stack) {
+      debugPrint('ERROR EXCEL: $e');
+      debugPrint('STACK: $stack');
+      if (mounted) {
+        Navigator.of(context).pop();
+        _notificar('Error al generar el Excel');
+      }
+    }
+  }
+
+  Future<void> _eliminarProducto(Producto producto) async {
+    final confirmar = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Eliminar producto'),
+        content: Text('¿Eliminás "${producto.desc}"?'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancelar')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.red, foregroundColor: Colors.white),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Eliminar'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmar == true && producto.id != null) {
+      await DatabaseService.eliminar(producto.id!);
+      await _cargarPagina(reset: true);
+      await _actualizarContador();
+    }
   }
 
   void _agregarAlCarrito(Producto prod) {
@@ -283,17 +618,12 @@ class _ListaPreciosAppState extends State<ListaPreciosApp> {
                   if (index >= 0) {
                     _carrito[index].cantidad += cantidad;
                   } else {
-                    _carrito.add(
-                        ArticuloCarrito(producto: prod, cantidad: cantidad));
+                    _carrito.add(ArticuloCarrito(producto: prod, cantidad: cantidad));
                   }
+                  _selectedId = null;
                 });
                 Navigator.pop(ctx);
-                setState(() => _selectedId = null);
-                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                  content: Text('${cantidad}x ${prod.desc} agregado'),
-                  duration: const Duration(seconds: 1),
-                  backgroundColor: Colors.green,
-                ));
+                _notificar('${cantidad}x ${prod.desc} agregado');
               }
             },
             icon: const Icon(Icons.add_shopping_cart),
@@ -306,222 +636,192 @@ class _ListaPreciosAppState extends State<ListaPreciosApp> {
     );
   }
 
-  // --- MÉTODOS DE SOPORTE ---
-
-  Future<void> _importarArchivo() async {
-    final result = await FilePicker.platform.pickFiles(
-        type: FileType.custom, allowedExtensions: ['xlsx', 'csv']);
-    if (result == null) return;
-
-    setState(() => _cargando = true);
-    try {
-      final file = File(result.files.single.path!);
-      final extension = result.files.single.extension;
-      List<Producto> productos = [];
-
-      if (extension == 'xlsx') {
-        final excel = Excel.decodeBytes(file.readAsBytesSync());
-        for (var table in excel.tables.keys) {
-          final rows = excel.tables[table]!.rows;
-          for (var i = 1; i < rows.length; i++) {
-            final row = rows[i];
-            if (row.length >= 6) {
-              productos.add(Producto(
-                codigo: row[0]?.value?.toString() ?? '',
-                barra: row[1]?.value?.toString() ?? '',
-                desc: row[2]?.value?.toString() ?? '',
-                marca: row[3]?.value?.toString() ?? '',
-                mayor: row[4]?.value?.toString().replaceAll('.', ',') ??
-                    '0,00',
-                minor: row[5]?.value?.toString().replaceAll('.', ',') ??
-                    '0,00',
-                prov: row.length > 6
-                    ? row[6]?.value?.toString() ?? ''
-                    : '',
-              ));
-            }
-          }
-        }
-      } else if (extension == 'csv') {
-        // FIX #4: CSV ahora implementado (separador ';' — estándar Argentina)
-        final lines = file.readAsLinesSync();
-        for (var i = 1; i < lines.length; i++) {
-          final cols = lines[i].split(';');
-          if (cols.length >= 6) {
-            productos.add(Producto(
-              codigo: cols[0].trim(),
-              barra:  cols[1].trim(),
-              desc:   cols[2].trim(),
-              marca:  cols[3].trim(),
-              mayor:  cols[4].trim().replaceAll('.', ','),
-              minor:  cols[5].trim().replaceAll('.', ','),
-              prov:   cols.length > 6 ? cols[6].trim() : '',
-            ));
-          }
-        }
-      } else {
-        // FIX #4: formato no soportado — avisa al usuario
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Formato no soportado. Usá .xlsx o .csv')),
-          );
-        }
-        setState(() => _cargando = false);
-        return;
-      }
-
-      if (productos.isNotEmpty) {
-        await DatabaseService.eliminarTodos();
-        await DatabaseService.insertarLote(productos);
-        await _actualizarContador();
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('${productos.length} productos importados')),
-          );
-        }
-      } else {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('El archivo no contiene datos válidos')),
-          );
-        }
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Error al importar: $e')));
-      }
-    }
-    if (mounted) setState(() => _cargando = false);
+  void _notificar(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
-  Future<void> _compartirExcel() async {
-    final productos = await DatabaseService.todos();
-    if (productos.isEmpty) return;
+  void _abrirFormulario({Producto? existente, String? barraPrecargada}) {
+    final esNuevo = existente == null;
+    final controllers = {
+      'BARRA': TextEditingController(text: barraPrecargada ?? existente?.barra ?? ''),
+      'DESC': TextEditingController(text: existente?.desc ?? ''),
+      'MARCA': TextEditingController(text: existente?.marca ?? ''),
+      'MAYOR': TextEditingController(text: existente?.mayor ?? ''),
+      'MINOR': TextEditingController(text: existente?.minor ?? ''),
+      'PROV': TextEditingController(text: existente?.prov ?? ''),
+    };
+    final nodes = List.generate(6, (_) => FocusNode());
 
-    final excel = Excel.createExcel();
-    final sheet = excel['Precios'];
-    sheet.appendRow([
-      TextCellValue('Código'),
-      TextCellValue('Barra'),
-      TextCellValue('Descripción'),
-      TextCellValue('Marca'),
-      TextCellValue('Mayor'),
-      TextCellValue('Minor'),
-      TextCellValue('Prov'),
-    ]);
-
-    for (final prod in productos) { // FIX #1: 'p' → 'prod'
-      sheet.appendRow([
-        TextCellValue(prod.codigo),
-        TextCellValue(prod.barra),
-        TextCellValue(prod.desc),
-        TextCellValue(prod.marca),
-        TextCellValue(prod.mayor),
-        TextCellValue(prod.minor),
-        TextCellValue(prod.prov),
-      ]);
-    }
-
-    final directory = await getTemporaryDirectory();
-    final path = path_lib.join(directory.path, "Precios_Torreon.xlsx"); // FIX #1 aplicado
-    final file = File(path)..writeAsBytesSync(excel.encode()!);
-
-    await Share.shareXFiles([XFile(file.path)],
-        text: 'Lista de Precios Abastecimiento El Torreón');
-  }
-
-  void _abrirFormulario({Producto? existente}) {
-    final codCtrl = TextEditingController(text: existente?.codigo ?? '');
-    final barCtrl = TextEditingController(text: existente?.barra ?? '');
-    final desCtrl = TextEditingController(text: existente?.desc ?? '');
-    final marCtrl = TextEditingController(text: existente?.marca ?? '');
-    final mayCtrl = TextEditingController(text: existente?.mayor ?? '');
-    final minCtrl = TextEditingController(text: existente?.minor ?? '');
-    final proCtrl = TextEditingController(text: existente?.prov ?? '');
+    final Future<String> codigoFuturo = esNuevo
+        ? DatabaseService.proximoCodigo()
+        : Future.value(existente?.codigo ?? '');
 
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(existente == null ? 'Nuevo Producto' : 'Editar Producto'),
-        content: SingleChildScrollView(
-          child: Column(
-            children: [
-              TextField(
-                  controller: codCtrl,
-                  decoration:
-                      const InputDecoration(labelText: 'Código')),
-              TextField(
-                  controller: barCtrl,
-                  decoration:
-                      const InputDecoration(labelText: 'Barra')),
-              TextField(
-                  controller: desCtrl,
-                  decoration:
-                      const InputDecoration(labelText: 'Descripción')),
-              TextField(
-                  controller: marCtrl,
-                  decoration:
-                      const InputDecoration(labelText: 'Marca')),
-              TextField(
-                  controller: mayCtrl,
-                  decoration:
-                      const InputDecoration(labelText: 'Precio Mayor')),
-              TextField(
-                  controller: minCtrl,
-                  decoration:
-                      const InputDecoration(labelText: 'Precio Minor')),
-              TextField(
-                  controller: proCtrl,
-                  decoration:
-                      const InputDecoration(labelText: 'Proveedor')),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancelar')),
-          ElevatedButton(
-            onPressed: () async {
-              // FIX #1: variable local renombrada a 'nuevo' para evitar shadowing
-              final nuevo = Producto(
-                id: existente?.id,
-                codigo: codCtrl.text,
-                barra: barCtrl.text,
-                desc: desCtrl.text,
-                marca: marCtrl.text,
-                mayor: mayCtrl.text,
-                minor: minCtrl.text,
-                prov: proCtrl.text,
-              );
-              try {
-                if (existente == null) {
-                  await DatabaseService.insertar(nuevo);
-                } else {
-                  await DatabaseService.actualizar(nuevo);
-                }
-                if (ctx.mounted) Navigator.pop(ctx);
-                _actualizarContador();
-                _cargarPagina(reset: true);
-              } catch (e) {
-                // FIX #5: manejo de error en guardar
-                if (ctx.mounted) {
-                  ScaffoldMessenger.of(ctx).showSnackBar(
-                    SnackBar(content: Text('Error al guardar: $e')),
+      builder: (ctx) => FutureBuilder<String>(
+        future: codigoFuturo,
+        builder: (ctx, snapshot) {
+          final codigoMostrado = snapshot.data ?? '...';
+          return AlertDialog(
+            title: Text(esNuevo ? 'Nuevo producto' : 'Editar producto'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: TextField(
+                      readOnly: true,
+                      decoration: InputDecoration(
+                        labelText: 'Código interno',
+                        border: const OutlineInputBorder(),
+                        filled: true,
+                        fillColor: Colors.grey[100],
+                        prefixIcon: const Icon(Icons.tag),
+                      ),
+                      controller: TextEditingController(text: codigoMostrado),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: controllers['BARRA']!,
+                            focusNode: nodes[0],
+                            textInputAction: TextInputAction.next,
+                            decoration: const InputDecoration(
+                              labelText: 'Código de barras',
+                              border: OutlineInputBorder(),
+                            ),
+                            onSubmitted: (_) =>
+                                FocusScope.of(ctx).requestFocus(nodes[1]),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Material(
+                          color: _kRojo,
+                          borderRadius: BorderRadius.circular(8),
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(8),
+                            onTap: () async {
+                              final codigo = await Navigator.push<String>(
+                                ctx,
+                                MaterialPageRoute(
+                                    builder: (_) => const EscanerPage()),
+                              );
+                              if (codigo != null) {
+                                controllers['BARRA']!.text = codigo;
+                              }
+                            },
+                            child: const Padding(
+                              padding: EdgeInsets.all(12),
+                              child: Icon(Icons.qr_code_scanner,
+                                  color: Colors.white, size: 24),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  _campo(controllers['DESC']!, nodes[1], nodes[2], 'Descripción'),
+                  _campo(controllers['MARCA']!, nodes[2], nodes[3], 'Marca'),
+                  _campo(controllers['MAYOR']!, nodes[3], nodes[4], 'Precio mayorista',
+                      isNum: true),
+                  _campo(controllers['MINOR']!, nodes[4], nodes[5], 'Precio minorista',
+                      isNum: true),
+                  _campo(controllers['PROV']!, nodes[5], null, 'Proveedor'),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  _liberarFormulario(controllers, nodes);
+                  Navigator.pop(ctx);
+                },
+                child: const Text('Cancelar'),
+              ),
+              ElevatedButton(
+                onPressed: () async {
+                  final mayorStr = controllers['MAYOR']!.text.replaceAll(',', '.');
+                  final minorStr = controllers['MINOR']!.text.replaceAll(',', '.');
+                  if (double.tryParse(mayorStr) == null ||
+                      double.tryParse(minorStr) == null) {
+                    _notificar('Los precios deben ser números válidos');
+                    return;
+                  }
+
+                  final producto = Producto(
+                    id: existente?.id,
+                    codigo: esNuevo
+                        ? await DatabaseService.proximoCodigo()
+                        : existente?.codigo ?? '',
+                    barra: controllers['BARRA']!.text.trim(),
+                    desc: controllers['DESC']!.text.trim(),
+                    marca: controllers['MARCA']!.text.trim(),
+                    mayor: controllers['MAYOR']!.text.trim(),
+                    minor: controllers['MINOR']!.text.trim(),
+                    prov: controllers['PROV']!.text.trim(),
                   );
-                }
-              }
-            },
-            child: const Text('Guardar'),
-          )
-        ],
+
+                  if (esNuevo) {
+                    await DatabaseService.insertar(producto);
+                  } else {
+                    await DatabaseService.actualizar(producto);
+                  }
+
+                  _liberarFormulario(controllers, nodes);
+                  if (ctx.mounted) Navigator.pop(ctx);
+                  await _cargarPagina(reset: true);
+                  await _actualizarContador();
+                },
+                child: const Text('Guardar'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  void _liberarFormulario(
+      Map<String, TextEditingController> controllers, List<FocusNode> nodes) {
+    for (final c in controllers.values) { c.dispose(); }
+    for (final n in nodes) { n.dispose(); }
+  }
+
+  Widget _campo(
+    TextEditingController ctrl,
+    FocusNode current,
+    FocusNode? next,
+    String label, {
+    bool isNum = false,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: TextField(
+        controller: ctrl,
+        focusNode: current,
+        keyboardType: isNum
+            ? const TextInputType.numberWithOptions(decimal: true)
+            : TextInputType.text,
+        textInputAction: next != null ? TextInputAction.next : TextInputAction.done,
+        decoration: InputDecoration(labelText: label, border: const OutlineInputBorder()),
+        onSubmitted: (_) =>
+            next != null ? FocusScope.of(context).requestFocus(next) : null,
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
+    final subtitulo = _queryActual.isEmpty
+        ? '$_totalCount productos cargados'
+        : '${_lista.length} de $_totalCount resultados';
+
     return Scaffold(
       appBar: AppBar(
         title: Column(
@@ -529,24 +829,25 @@ class _ListaPreciosAppState extends State<ListaPreciosApp> {
           children: [
             const Text('Precios El Torreón',
                 style: TextStyle(fontSize: 16, color: Colors.white)),
-            Text(
-                _queryActual.isEmpty
-                    ? '$_totalDbCount productos'
-                    : '${_lista.length} resultados',
-                style:
-                    const TextStyle(fontSize: 11, color: Colors.white70)),
+            Text(subtitulo,
+                style: const TextStyle(fontSize: 11, color: Colors.white70)),
           ],
         ),
         backgroundColor: _kRojo,
+        iconTheme: const IconThemeData(color: Colors.white),
         actions: [
           IconButton(
-              icon: const Icon(Icons.share), onPressed: _compartirExcel),
-          IconButton(
-              icon: const Icon(Icons.upload_file),
-              onPressed: _importarArchivo),
-          IconButton(
-              icon: const Icon(Icons.add),
+              icon: const Icon(Icons.add, color: Colors.white),
+              tooltip: 'Nuevo producto',
               onPressed: () => _abrirFormulario()),
+          IconButton(
+              icon: const Icon(Icons.share, color: Colors.white),
+              tooltip: 'Exportar Excel',
+              onPressed: _compartirExcel),
+          IconButton(
+              icon: const Icon(Icons.upload_file, color: Colors.white),
+              tooltip: 'Importar archivo',
+              onPressed: _importarArchivo),
         ],
       ),
       body: Column(
@@ -559,7 +860,7 @@ class _ListaPreciosAppState extends State<ListaPreciosApp> {
                   child: TextField(
                     controller: _searchController,
                     decoration: InputDecoration(
-                      labelText: 'Buscar...',
+                      labelText: 'Buscar por descripción, código, marca...',
                       prefixIcon: const Icon(Icons.search),
                       border: const OutlineInputBorder(),
                       suffixIcon: _queryActual.isNotEmpty
@@ -567,136 +868,128 @@ class _ListaPreciosAppState extends State<ListaPreciosApp> {
                               icon: const Icon(Icons.clear),
                               onPressed: () {
                                 _searchController.clear();
-                                setState(
-                                    () => _queryActual = '');
-                                _cargarPagina(reset: true);
-                              })
+                                _onSearchChanged('');
+                              },
+                            )
                           : null,
                     ),
-                    onChanged: (v) {
-                      _debounce?.cancel();
-                      _debounce = Timer(
-                          const Duration(milliseconds: 300), () {
-                        if (!mounted) return; // FIX #2: guard extra
-                        setState(() => _queryActual = v.trim());
-                        _cargarPagina(reset: true);
-                      });
-                    },
+                    onChanged: _onSearchChanged,
                   ),
                 ),
                 const SizedBox(width: 8),
-                IconButton.filled(
-                  style: IconButton.styleFrom(backgroundColor: _kRojo),
-                  icon: const Icon(Icons.qr_code_scanner,
-                      color: Colors.white),
-                  onPressed: () async {
-                    final codigo = await Navigator.push<String>(
-                        context,
-                        MaterialPageRoute(
-                            builder: (_) => const EscanerPage()));
-                    if (codigo != null) {
-                      _searchController.text = codigo;
-                      setState(() => _queryActual = codigo);
-                      _cargarPagina(reset: true);
-                    }
-                  },
+                Material(
+                  color: _kRojo,
+                  borderRadius: BorderRadius.circular(8),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(8),
+                    onTap: _escanearEnBusqueda,
+                    child: const Padding(
+                      padding: EdgeInsets.all(12),
+                      child: Icon(Icons.qr_code_scanner,
+                          color: Colors.white, size: 28),
+                    ),
+                  ),
                 ),
               ],
             ),
           ),
           Expanded(
-            child: _lista.isEmpty && !_cargando
-                ? Center(
-                    child: Text(
-                      _queryActual.isEmpty
-                          ? 'Buscá un producto para empezar'
-                          : 'Sin resultados para "$_queryActual"', // FIX: mensaje más útil
+            child: _queryActual.isEmpty && _lista.isEmpty
+                ? const Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.search, size: 64, color: Colors.black12),
+                        SizedBox(height: 12),
+                        Text('Buscá un producto o escaneá un código',
+                            style: TextStyle(color: Colors.grey)),
+                      ],
                     ),
                   )
-                : ListView.builder(
-                    controller: _scrollController,
-                    itemCount: _lista.length + (_hayMas ? 1 : 0),
-                    itemBuilder: (ctx, i) {
-                      if (i == _lista.length) {
-                        return const Center(
-                            child: Padding(
-                                padding: EdgeInsets.all(8.0),
-                                child: CircularProgressIndicator()));
-                      }
-                      final prod = _lista[i]; // FIX #1: 'p' → 'prod'
-                      // FIX #6: comparación segura con null check
-                      final isSelected =
-                          prod.id != null && _selectedId == prod.id;
-                      return Card(
-                        margin: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 4),
-                        color: isSelected ? Colors.red[50] : null,
-                        child: ListTile(
-                          onTap: () => setState(() =>
-                              _selectedId = isSelected ? null : prod.id),
-                          title: Text(prod.desc,
-                              style: const TextStyle(
-                                  fontWeight: FontWeight.bold)),
-                          subtitle: Text('\$${prod.minor}',
-                              style: const TextStyle(
-                                  color: _kRojo,
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.bold)),
-                          trailing: isSelected
-                              ? Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    IconButton(
-                                      icon: const Icon(Icons.add_shopping_cart, color: Colors.green),
-                                      tooltip: 'Agregar al carrito',
-                                      onPressed: () => _agregarAlCarrito(prod),
+                : _lista.isEmpty && !_cargando
+                    ? const Center(
+                        child: Text('Sin resultados',
+                            style: TextStyle(color: Colors.grey)))
+                    : ListView.builder(
+                        controller: _scrollController,
+                        itemCount: _lista.length + (_hayMas ? 1 : 0),
+                        itemBuilder: (context, index) {
+                          if (index == _lista.length) {
+                            return const Padding(
+                              padding: EdgeInsets.all(16),
+                              child: Center(child: CircularProgressIndicator()),
+                            );
+                          }
+                          final prod = _lista[index];
+                          final isSelected = _selectedId == prod.id;
+                          return Card(
+                            margin: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 3),
+                            color: isSelected ? Colors.red[50] : null,
+                            child: ListTile(
+                              onTap: () {
+                                setState(() {
+                                  _selectedId = isSelected ? null : prod.id;
+                                });
+                              },
+                              title: Text(
+                                prod.desc,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.black,
+                                  fontSize: 15,
+                                ),
+                              ),
+                              subtitle: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    '\$${prod.minor}',
+                                    style: const TextStyle(
+                                      color: Colors.red,
+                                      fontSize: 20,
+                                      fontWeight: FontWeight.bold,
                                     ),
-                                    IconButton(
-                                      icon: const Icon(Icons.edit, color: Colors.orange),
-                                      tooltip: 'Editar',
-                                      onPressed: () {
-                                        setState(() => _selectedId = null);
-                                        _abrirFormulario(existente: prod);
-                                      },
+                                  ),
+                                  Text(
+                                    'Mayor: \$${prod.mayor}  |  ${prod.marca}',
+                                    style: const TextStyle(
+                                      color: Colors.black54,
+                                      fontSize: 12,
                                     ),
-                                    IconButton(
-                                      icon: const Icon(Icons.delete, color: Colors.red),
-                                      tooltip: 'Eliminar',
-                                      onPressed: () async {
-                                        final confirmar = await showDialog<bool>(
-                                          context: context,
-                                          builder: (ctx) => AlertDialog(
-                                            title: const Text('¿Eliminar?'),
-                                            content: Text('¿Eliminás "${prod.desc}"?'),
-                                            actions: [
-                                              TextButton(
-                                                onPressed: () => Navigator.pop(ctx, false),
-                                                child: const Text('Cancelar'),
-                                              ),
-                                              ElevatedButton(
-                                                onPressed: () => Navigator.pop(ctx, true),
-                                                style: ElevatedButton.styleFrom(
-                                                    backgroundColor: Colors.red,
-                                                    foregroundColor: Colors.white),
-                                                child: const Text('Eliminar'),
-                                              ),
-                                            ],
-                                          ),
-                                        );
-                                        if (confirmar == true) {
-                                          await DatabaseService.eliminar(prod.id!);
-                                          _actualizarContador();
-                                          _cargarPagina(reset: true);
-                                        }
-                                      },
-                                    ),
-                                  ],
-                                )
-                              : null,
-                        ),
-                      );
-                    },
-                  ),
+                                  ),
+                                ],
+                              ),
+                              isThreeLine: true,
+                              trailing: isSelected
+                                  ? Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        IconButton(
+                                          icon: const Icon(Icons.add_shopping_cart,
+                                              color: Colors.green),
+                                          tooltip: 'Agregar al carrito',
+                                          onPressed: () => _agregarAlCarrito(prod),
+                                        ),
+                                        IconButton(
+                                          icon: const Icon(Icons.edit,
+                                              color: Colors.blue),
+                                          onPressed: () =>
+                                              _abrirFormulario(existente: prod),
+                                        ),
+                                        IconButton(
+                                          icon: const Icon(Icons.delete,
+                                              color: Colors.red),
+                                          onPressed: () =>
+                                              _eliminarProducto(prod),
+                                        ),
+                                      ],
+                                    )
+                                  : null,
+                            ),
+                          );
+                        },
+                      ),
           ),
         ],
       ),
@@ -708,14 +1001,12 @@ class _ListaPreciosAppState extends State<ListaPreciosApp> {
                       builder: (_) => CarritoPage(
                             carrito: _carrito,
                             onUpdate: () => setState(() {}),
-                            onNuevaCompra: () {
-                              setState(() {
-                                _carrito.clear();
-                                _queryActual = '';
-                                _lista = [];
-                                _searchController.clear();
-                              });
-                            },
+                            onNuevaCompra: () => setState(() {
+                              _carrito.clear();
+                              _queryActual = '';
+                              _lista = [];
+                              _searchController.clear();
+                            }),
                           ))),
               label: Text('${_carrito.length} items'),
               icon: const Icon(Icons.shopping_cart),
@@ -732,8 +1023,12 @@ class CarritoPage extends StatefulWidget {
   final List<ArticuloCarrito> carrito;
   final VoidCallback onUpdate;
   final VoidCallback onNuevaCompra;
-  const CarritoPage(
-      {super.key, required this.carrito, required this.onUpdate, required this.onNuevaCompra});
+  const CarritoPage({
+    super.key,
+    required this.carrito,
+    required this.onUpdate,
+    required this.onNuevaCompra,
+  });
 
   @override
   State<CarritoPage> createState() => _CarritoPageState();
@@ -743,23 +1038,20 @@ class _CarritoPageState extends State<CarritoPage> {
   double get total =>
       widget.carrito.fold(0, (sum, item) => sum + item.subtotal);
 
-  void _compartirWhatsApp() {
-    String m = "🛍️ *Pedido El Torreón*\n\n";
+  void _compartirCompra() {
+    String m = "🛍️ *Compra El Torreón*\n\n";
     for (var item in widget.carrito) {
-      m +=
-          "• ${item.cantidad}x ${item.producto.desc} (\$${item.producto.minor}) -> *\$${item.subtotal.toStringAsFixed(2).replaceAll('.', ',')}*\n";
+      m += "• ${item.cantidad}x ${item.producto.desc} (\$${item.producto.minor}) -> *\$${item.subtotal.toStringAsFixed(2).replaceAll('.', ',')}*\n";
     }
-    m +=
-        "\n💰 *TOTAL: \$${total.toStringAsFixed(2).replaceAll('.', ',')}*";
-    Share.share(m);
+    m += "\n💰 *TOTAL: \$${total.toStringAsFixed(2).replaceAll('.', ',')}*";
+    SharePlus.instance.share(ShareParams(text: m));
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Mi Carrito',
-            style: TextStyle(color: Colors.white)),
+        title: const Text('Mi Carrito', style: TextStyle(color: Colors.white)),
         backgroundColor: Colors.green,
         iconTheme: const IconThemeData(color: Colors.white),
       ),
@@ -772,7 +1064,8 @@ class _CarritoPageState extends State<CarritoPage> {
               itemBuilder: (ctx, i) {
                 final item = widget.carrito[i];
                 return ListTile(
-                  title: Text(item.producto.desc),
+                  title: Text(item.producto.desc,
+                      style: const TextStyle(fontWeight: FontWeight.bold)),
                   subtitle: Text(
                       '\$${item.producto.minor} x ${item.cantidad} = \$${item.subtotal.toStringAsFixed(2).replaceAll('.', ',')}'),
                   trailing: Row(
@@ -793,8 +1086,7 @@ class _CarritoPageState extends State<CarritoPage> {
                           }),
                       Text('${item.cantidad}',
                           style: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold)),
+                              fontSize: 16, fontWeight: FontWeight.bold)),
                       IconButton(
                           icon: const Icon(Icons.add_circle_outline,
                               color: Colors.green),
@@ -811,101 +1103,104 @@ class _CarritoPageState extends State<CarritoPage> {
           SafeArea(
             top: false,
             child: Container(
-            padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
-            decoration: const BoxDecoration(
-              color: Colors.white,
-              boxShadow: [
-                BoxShadow(
-                    color: Colors.black12,
-                    blurRadius: 10,
-                    spreadRadius: 2)
-              ],
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text('TOTAL',
-                        style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold)),
-                    Text(
-                        '\$${total.toStringAsFixed(2).replaceAll('.', ',')}',
-                        style: const TextStyle(
-                            fontSize: 24,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.green)),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  height: 48,
-                  child: ElevatedButton.icon(
-                    onPressed: widget.carrito.isEmpty
-                        ? null
-                        : _compartirWhatsApp,
-                    icon: const Icon(Icons.send),
-                    label: const Text('COMPARTIR PEDIDO (WhatsApp)'),
-                    style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.green,
-                        foregroundColor: Colors.white),
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                boxShadow: [
+                  BoxShadow(color: Colors.black12, blurRadius: 10, spreadRadius: 2)
+                ],
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text('TOTAL',
+                          style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                      Text(
+                          '\$${total.toStringAsFixed(2).replaceAll('.', ',')}',
+                          style: const TextStyle(
+                              fontSize: 24,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.green)),
+                    ],
                   ),
-                ),
-                const SizedBox(height: 8),
-                SizedBox(
-                  width: double.infinity,
-                  height: 48,
-                  child: ElevatedButton.icon(
-                    onPressed: () {
-                      showDialog(
-                        context: context,
-                        builder: (ctx) => AlertDialog(
-                          title: const Text('¿Nueva compra?'),
-                          content: const Text(
-                              'Se va a vaciar el carrito y volver al buscador.'),
-                          actions: [
-                            TextButton(
-                              onPressed: () => Navigator.pop(ctx),
-                              child: const Text('Cancelar'),
-                            ),
-                            ElevatedButton(
-                              onPressed: () {
-                                Navigator.pop(ctx);
-                                widget.onNuevaCompra();
-                                Navigator.pop(context);
-                              },
-                              style: ElevatedButton.styleFrom(
-                                  backgroundColor: _kRojo,
-                                  foregroundColor: Colors.white),
-                              child: const Text('Sí, nueva compra'),
-                            ),
-                          ],
-                        ),
-                      );
-                    },
-                    icon: const Icon(Icons.shopping_cart_checkout),
-                    label: const Text('FINALIZAR / NUEVA COMPRA'),
-                    style: ElevatedButton.styleFrom(
-                        backgroundColor: _kRojo,
-                        foregroundColor: Colors.white),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 52,
+                    child: ElevatedButton.icon(
+                      onPressed: widget.carrito.isEmpty
+                          ? null
+                          : () {
+                              showDialog(
+                                context: context,
+                                builder: (ctx) => AlertDialog(
+                                  title: const Text('Finalizar Compra'),
+                                  content: const Text(
+                                      '¿Qué querés hacer con la compra?'),
+                                  actions: [
+                                    SizedBox(
+                                      width: double.infinity,
+                                      child: ElevatedButton.icon(
+                                        onPressed: () {
+                                          Navigator.pop(ctx);
+                                          _compartirCompra();
+                                        },
+                                        icon: const Icon(Icons.share),
+                                        label: const Text('Compartir compra'),
+                                        style: ElevatedButton.styleFrom(
+                                            backgroundColor: Colors.green,
+                                            foregroundColor: Colors.white),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    SizedBox(
+                                      width: double.infinity,
+                                      child: ElevatedButton.icon(
+                                        onPressed: () {
+                                          Navigator.pop(ctx);
+                                          widget.onNuevaCompra();
+                                          Navigator.pop(context);
+                                        },
+                                        icon: const Icon(Icons.shopping_cart_checkout),
+                                        label: const Text('Nueva compra'),
+                                        style: ElevatedButton.styleFrom(
+                                            backgroundColor: _kRojo,
+                                            foregroundColor: Colors.white),
+                                      ),
+                                    ),
+                                    TextButton(
+                                      onPressed: () => Navigator.pop(ctx),
+                                      child: const Text('Cancelar'),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            },
+                      icon: const Icon(Icons.check_circle_outline),
+                      label: const Text('FINALIZAR COMPRA',
+                          style: TextStyle(
+                              fontSize: 16, fontWeight: FontWeight.bold)),
+                      style: ElevatedButton.styleFrom(
+                          backgroundColor: _kRojo,
+                          foregroundColor: Colors.white),
+                    ),
                   ),
-                )
-              ],
+                ],
+              ),
             ),
-          ))
+          ),
         ],
       ),
     );
   }
 }
 
-// --- ESCANER ---
-
 class EscanerPage extends StatefulWidget {
   const EscanerPage({super.key});
+
   @override
   State<EscanerPage> createState() => _EscanerPageState();
 }
@@ -924,10 +1219,10 @@ class _EscanerPageState extends State<EscanerPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-          title: const Text('Escanear Barra',
-              style: TextStyle(color: Colors.white)),
-          backgroundColor: _kRojo,
-          iconTheme: const IconThemeData(color: Colors.white)),
+        title: const Text('Escanear código'),
+        backgroundColor: _kRojo,
+        iconTheme: const IconThemeData(color: Colors.white),
+      ),
       body: MobileScanner(
         controller: _controller,
         onDetect: (capture) async {
@@ -935,12 +1230,10 @@ class _EscanerPageState extends State<EscanerPage> {
           final barcodes = capture.barcodes;
           if (barcodes.isNotEmpty && barcodes.first.rawValue != null) {
             _detectado = true;
-            final rawValue = barcodes.first.rawValue;
-            // Capturar el navigator ANTES del await evita usar
-            // BuildContext a través de un gap asíncrono
-            final nav = Navigator.of(context);
             await _controller.stop();
-            nav.pop(rawValue);
+            if (mounted) {
+              Navigator.pop(context, barcodes.first.rawValue);
+            }
           }
         },
       ),

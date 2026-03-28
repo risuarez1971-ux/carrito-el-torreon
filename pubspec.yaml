@@ -20,7 +20,7 @@ dependencies:
   path_provider: ^2.1.4      # Para encontrar carpetas temporales/documentos
   file_picker: ^8.1.2        # Para seleccionar el Excel/CSV
   excel: ^4.0.3              # Para leer y generar archivos Excel
-  share_plus: ^10.1.2        # Para compartir por WhatsApp o Email
+  share_plus: ^11.0.0        # Para compartir por WhatsApp o Email
 
 dev_dependencies:
   flutter_test:
