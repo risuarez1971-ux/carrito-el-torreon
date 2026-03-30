@@ -396,10 +396,13 @@ List<Producto> _parsearArchivo(_ParseArgs args) {
       for (var i = 1; i < rows.length; i++) {
         final row = rows[i];
         if (row.length >= 6) {
+          // Ignorar filas vacías — la descripción es obligatoria
+          final desc = row[2]?.value?.toString().trim() ?? '';
+          if (desc.isEmpty) continue;
           productos.add(Producto(
             codigo: row[0]?.value?.toString() ?? '',
             barra: row[1]?.value?.toString() ?? '',
-            desc: row[2]?.value?.toString() ?? '',
+            desc: desc,
             marca: row[3]?.value?.toString() ?? '',
             mayor: (row[4]?.value?.toString() ?? '0,00').replaceAll('.', ','),
             minor: (row[5]?.value?.toString() ?? '0,00').replaceAll('.', ','),
