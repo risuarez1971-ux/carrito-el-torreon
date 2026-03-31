@@ -399,6 +399,19 @@ List<Producto> _parsearArchivo(_ParseArgs args) {
           // Ignorar filas vacías — la descripción es obligatoria
           final desc = row[2]?.value?.toString().trim() ?? '';
           if (desc.isEmpty) continue;
+          // Leer stock y stock mínimo si existen (columnas 8 y 9)
+          final stockVal = row.length > 7 ? row[7]?.value : null;
+          final stockMinVal = row.length > 8 ? row[8]?.value : null;
+          final stockRaw = stockVal is IntCellValue
+              ? stockVal.value
+              : stockVal is DoubleCellValue
+                  ? stockVal.value.toInt()
+                  : int.tryParse(stockVal?.toString() ?? '') ?? 0;
+          final stockMinRaw = stockMinVal is IntCellValue
+              ? stockMinVal.value
+              : stockMinVal is DoubleCellValue
+                  ? stockMinVal.value.toInt()
+                  : int.tryParse(stockMinVal?.toString() ?? '') ?? 0;
           productos.add(Producto(
             codigo: row[0]?.value?.toString() ?? '',
             barra: row[1]?.value?.toString() ?? '',
@@ -407,6 +420,8 @@ List<Producto> _parsearArchivo(_ParseArgs args) {
             mayor: (row[4]?.value?.toString() ?? '0,00').replaceAll('.', ','),
             minor: (row[5]?.value?.toString() ?? '0,00').replaceAll('.', ','),
             prov: row.length > 6 ? row[6]?.value?.toString() ?? '' : '',
+            stock: stockRaw,
+            stockMinimo: stockMinRaw,
           ));
         }
       }
@@ -1287,7 +1302,7 @@ class _ListaPreciosAppState extends State<ListaPreciosApp> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.15),
+        color: color.withValues(alpha: 0.15),
         borderRadius: BorderRadius.circular(4),
       ),
       child: Text(texto,
@@ -1777,7 +1792,7 @@ class _StockPageState extends State<StockPage>
 
     return ListTile(
       leading: CircleAvatar(
-        backgroundColor: color.withOpacity(0.15),
+        backgroundColor: color.withValues(alpha: 0.15),
         child: Icon(icon, color: color, size: 20),
       ),
       title: Text(mov.productoDesc,
