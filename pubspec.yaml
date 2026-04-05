@@ -21,7 +21,8 @@ dependencies:
   file_picker: ^8.1.2        # Para seleccionar el Excel/CSV
   excel: ^4.0.3              # Para leer y generar archivos Excel
   share_plus: ^11.0.0        # Para compartir por WhatsApp o Email
-
+  speech_to_text: ^7.0.0
+  
 dev_dependencies:
   flutter_test:
     sdk: flutter

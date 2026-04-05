@@ -6,6 +6,7 @@ import 'package:path/path.dart' as p;
 import 'package:file_picker/file_picker.dart';
 import 'package:excel/excel.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:speech_to_text/speech_to_text.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -500,11 +501,24 @@ class _ListaPreciosAppState extends State<ListaPreciosApp> {
   Timer? _debounce;
   final ScrollController _scrollController = ScrollController();
 
+  // Speech to text
+  final SpeechToText _speech = SpeechToText();
+  bool _escuchando = false;
+  bool _speechDisponible = false;
+
   @override
   void initState() {
     super.initState();
     _actualizarContador();
     _scrollController.addListener(_onScroll);
+    _inicializarSpeech();
+  }
+
+  Future<void> _inicializarSpeech() async {
+    final disponible = await _speech.initialize(
+      onError: (e) => debugPrint('Speech error: $e'),
+    );
+    if (mounted) setState(() => _speechDisponible = disponible);
   }
 
   @override
@@ -824,6 +838,35 @@ class _ListaPreciosAppState extends State<ListaPreciosApp> {
           ),
         ],
       ),
+    );
+  }
+
+  Future<void> _escuchar() async {
+    if (!_speechDisponible) {
+      _notificar('Micrófono no disponible');
+      return;
+    }
+
+    if (_escuchando) {
+      await _speech.stop();
+      setState(() => _escuchando = false);
+      return;
+    }
+
+    setState(() => _escuchando = true);
+    await _speech.listen(
+      onResult: (result) {
+        final texto = result.recognizedWords;
+        _searchController.text = texto;
+        _onSearchChanged(texto);
+        if (result.finalResult) {
+          setState(() => _escuchando = false);
+        }
+      },
+      localeId: 'es_AR',
+      listenFor: const Duration(seconds: 10),
+      pauseFor: const Duration(seconds: 3),
+      cancelOnError: true,
     );
   }
 
@@ -1166,6 +1209,23 @@ class _ListaPreciosAppState extends State<ListaPreciosApp> {
                       padding: EdgeInsets.all(12),
                       child: Icon(Icons.qr_code_scanner,
                           color: Colors.white, size: 28),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Material(
+                  color: _escuchando ? Colors.orange : _kRojo,
+                  borderRadius: BorderRadius.circular(8),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(8),
+                    onTap: _escuchar,
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Icon(
+                        _escuchando ? Icons.mic : Icons.mic_none,
+                        color: Colors.white,
+                        size: 28,
+                      ),
                     ),
                   ),
                 ),
